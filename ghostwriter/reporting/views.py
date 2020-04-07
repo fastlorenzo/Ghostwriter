@@ -4,6 +4,7 @@ various webpages.
 
 # Import logging functionality
 import logging
+from pprint import pprint
 
 # Django imports for generic views and template rendering
 from django.urls import reverse
@@ -48,17 +49,24 @@ from .forms import (
 # Import model filters for views
 from .filters import FindingFilter, ReportFilter, ArchiveFilter
 
+# Import model resources for views
+from .resources import FindingResource
+
 # Import Python libraries for various things
 import io
 import os
 import csv
 import zipfile
+from datetime import datetime
 
 # Import for generating the xlsx reports in memory
 from xlsxwriter.workbook import Workbook
 
+import jinja2
+from docx.opc.exceptions import PackageNotFoundError
+
 # Import custom modules
-from modules import reportwriter
+from ghostwriter.modules import reportwriter
 
 
 # Setup logger
@@ -196,7 +204,7 @@ def import_findings(request):
         for entry in csv_reader:
             if error_count > 5:
                 raise Exception("Too many errors.  Discontinuing import.")
-            
+            pprint(entry)
             title = entry.get('title', None)
             if title is None:
                 messages.error(request, 'Missing title field', extra_tags='alert-danger')
@@ -207,7 +215,7 @@ def import_findings(request):
             logging.getLogger('error_logger').info('Adding %s to the database',
                                                    entry['title'])
             # Create a Severity object for the provided rating (e.g. High)
-            severity_entry = entry.get('severity', "Informational")
+            severity_entry = entry.get('severity', 'Informational')
             try:
                 severity = Severity.objects.get(severity__iexact=severity_entry)
             except Severity.DoesNotExist:
@@ -241,7 +249,7 @@ def import_findings(request):
 
         messages.success(request, 'Your csv file has been imported '
                          'successfully =)', extra_tags='alert-success')
-    
+
     except Exception as e:
         messages.error(request, str(e), extra_tags='alert-danger')
         logging.getLogger('error_logger').error(repr(e))
@@ -253,12 +261,21 @@ def import_findings(request):
 def assign_finding(request, pk):
     """View function for adding a finding to the user's active report."""
     def get_position(report_pk):
-        position = ReportFindingLink.objects.\
-            filter(report__pk=report_pk).count()
-        if position:
-            return position + 1
+        finding_count = ReportFindingLink.objects.\
+            filter(Q(report__pk=report_pk) & Q(severity=finding.severity)).count()
+        if finding_count:
+            try:
+                # Get all other findings of the same severity with last position first
+                finding_positions = ReportFindingLink.objects.filter(
+                    Q(report__pk=report_pk) & Q(severity=finding.severity)).order_by('-position')
+                # Set new position to be one above the last/largest position
+                last_position = finding_positions[0].position
+                return last_position + 1
+            except:
+                return finding_count + 1
         else:
             return 1
+
     # The user must have the `active_report` session variable
     # Get the variable and default to `None` if it does not exist
     active_report = request.session.get('active_report', None)
@@ -292,6 +309,7 @@ def assign_finding(request, pk):
         report_link.save()
         messages.success(request, '%s successfully added to report.' %
                          finding.title, extra_tags='alert-success')
+        return HttpResponseRedirect('{}#collapseFinding'.format(reverse('reporting:report_detail', args=(report.id,))))
         return HttpResponseRedirect(reverse('reporting:findings'))
     else:
         messages.error(request, 'You have no active report! Select a report '
@@ -303,17 +321,28 @@ def assign_finding(request, pk):
 @login_required
 def assign_blank_finding(request, pk):
     """View function for adding a blank finding to the specified report."""
+    info_sev = Severity.objects.get(severity='Informational')
+
     def get_position(report_pk):
-        position = ReportFindingLink.objects.filter(report=report).count()
-        if position:
-            return position + 1
+        finding_count = ReportFindingLink.objects.filter(Q(report__pk=pk) & Q(severity=info_sev)).count()
+        if finding_count:
+            try:
+                # Get all other findings of the same severity with last position first
+                finding_positions = ReportFindingLink.objects.filter(
+                    Q(report__pk=pk) & Q(severity=info_sev)).order_by('-position')
+                # Set new position to be one above the last/largest position
+                last_position = finding_positions[0].position
+                return last_position + 1
+            except:
+                return finding_count + 1
         else:
             return 1
+
     try:
         report = Report.objects.get(pk=pk)
     except Exception:
-        messages.error(request, 'A valid report could not be found for this '
-                       'blank finding.',
+        messages.error(request,
+                       'A valid report could not be found for this blank finding.',
                        extra_tags='alert-danger')
         return HttpResponseRedirect(reverse('reporting:reports'))
     report_link = ReportFindingLink(title='Blank Template',
@@ -324,8 +353,7 @@ def assign_blank_finding(request, pk):
                                     host_detection_techniques='',
                                     network_detection_techniques='',
                                     references='',
-                                    severity=Severity.objects.
-                                    get(severity='Informational'),
+                                    severity=info_sev,
                                     finding_type=FindingType.objects.
                                     get(finding_type='Network'),
                                     report=report,
@@ -336,6 +364,55 @@ def assign_blank_finding(request, pk):
                      'report.',
                      extra_tags='alert-success')
     return HttpResponseRedirect(reverse('reporting:report_detail', args=(report.id,)))
+
+
+@login_required
+def position_increase(request, pk):
+    """View function to increase a finding's position which moves it down the
+    list.
+    """
+    finding_instance = ReportFindingLink.objects.get(pk=pk)
+    finding_instance.position = finding_instance.position + 1
+    # Get all other findings of the same severity
+    finding_positions = ReportFindingLink.objects.filter(
+        Q(report=finding_instance.report.pk) & Q(severity=finding_instance.severity)).order_by('position')
+    # Check all of the findings against new position
+    for finding in finding_positions:
+        # Check if new position value matches another finding
+        if finding_instance.position == finding.position:
+            # Decrement the position so the findings swap places
+            finding.position = finding.position - 1
+            finding.save(update_fields=['position'])
+    # Save the updated position
+    finding_instance.save(update_fields=['position'])
+    return HttpResponseRedirect(reverse('reporting:report_detail',
+                                args=(finding_instance.report.id,)))
+
+
+@login_required
+def position_decrease(request, pk):
+    """View function to decrease a finding's position which moves it up the
+    list.
+    """
+    finding_instance = ReportFindingLink.objects.get(pk=pk)
+    finding_instance.position = finding_instance.position - 1
+    # Avoid negatives
+    if finding_instance.position < 0:
+        finding_instance.position = 0
+    # Get all other findings of the same severity
+    finding_positions = ReportFindingLink.objects.filter(
+        Q(report=finding_instance.report.pk) & Q(severity=finding_instance.severity)).order_by('position')
+    # Check all of the findings against new position
+    for finding in finding_positions:
+        # Check if new position value matches another finding
+        if finding_instance.position == finding.position:
+            # Decrement the position so the findings swap places
+            finding.position = finding.position + 1
+            finding.save(update_fields=['position'])
+    # Save the updated position
+    finding_instance.save(update_fields=['position'])
+    return HttpResponseRedirect(reverse('reporting:report_detail',
+                                args=(finding_instance.report.id,)))
 
 
 @login_required
@@ -352,7 +429,8 @@ def activate_report(request, pk):
             request.session['active_report']['title'] = report_instance.title
             messages.success(request, '%s is now your active report.' %
                              report_instance.title, extra_tags='alert-success')
-            return HttpResponseRedirect(reverse('reporting:report_detail', args=(pk, )))
+            # return HttpResponseRedirect(reverse('reporting:report_detail', args=(pk, )))
+            return HttpResponseRedirect(reverse('reporting:reports'))
         else:
             messages.error(request, 'The specified report does not exist!',
                            extra_tags='alert-danger')
@@ -469,15 +547,17 @@ def upload_evidence(request, pk):
     if request.method == 'POST':
         form = EvidenceForm(request.POST, request.FILES)
         if form.is_valid():
-            form.save()
-            active_report = request.session.get('active_report', None)
-            messages.success(request, 'Evidence uploaded successfully',
-                             extra_tags='alert-success')
-            if 'id' in active_report:
+            new_evidence = form.save()
+            if os.path.isfile(new_evidence.document.path):
+                messages.success(request, 'Evidence uploaded successfully',
+                                extra_tags='alert-success')
                 return HttpResponseRedirect(reverse('reporting:report_detail',
-                                            args=(active_report['id'],)))
+                                            args=(new_evidence.finding.report.id,)))
             else:
-                return HttpResponseRedirect(reverse('reporting:reports'))
+                messages.error(request, 'Evidence file failed to upload',
+                                extra_tags='alert-danger')
+                return HttpResponseRedirect(reverse('reporting:report_detail',
+                                            args=(new_evidence.finding.report.id,)))
     else:
         form = EvidenceForm(initial={
             'finding': pk,
@@ -487,57 +567,85 @@ def upload_evidence(request, pk):
 
 
 @login_required
+def upload_evidence_modal(request, pk):
+    """View function for handling evidence file uploads via TinyMCE URLDialog."""
+    # Get a list of previously used friendly names for this finding
+    report_queryset = Evidence.objects.filter(finding=pk).values_list('friendly_name', flat=True)
+    used_friendly_names = []
+    # Convert the queryset into a list to pass to JavaScript later
+    for name in report_queryset:
+        used_friendly_names.append(name)
+    # If request is a POST, validate the form and move to success page
+    if request.method == 'POST':
+        form = EvidenceForm(request.POST, request.FILES)
+        if form.is_valid():
+            new_evidence = form.save()
+            if os.path.isfile(new_evidence.document.path):
+                messages.success(request, 'Evidence uploaded successfully',
+                                extra_tags='alert-success')
+            else:
+                messages.error(request, 'Evidence file failed to upload',
+                                extra_tags='alert-danger')
+            return HttpResponseRedirect(reverse('reporting:upload_evidence_modal_success'))
+    # Other requests (GETs) are shown the form
+    else:
+        form = EvidenceForm(initial={
+            'finding': pk,
+            'uploaded_by': request.user
+            })
+    context = {
+        'form': form,
+        'used_friendly_names': used_friendly_names
+        }
+    return render(request, 'reporting/evidence_form_modal.html', context=context)
+
+
+@login_required
+def upload_evidence_modal_success(request):
+    """View function for displaying a simple success page for the TinyMCE URLDialog."""
+    return render(request, 'reporting/evidence_modal_success.html')
+
+
+@login_required
 def view_evidence(request, pk):
     """View function for viewing evidence file uploads."""
     evidence_instance = Evidence.objects.get(pk=pk)
     file_content = None
-    if (
-            evidence_instance.document.name.endswith('.txt') or
-            evidence_instance.document.name.endswith('.log') or
-            evidence_instance.document.name.endswith('.ps1') or
-            evidence_instance.document.name.endswith('.py') or
-            evidence_instance.document.name.endswith('.md')
-      ):
-        filetype = 'text'
-        file_content = evidence_instance.document.read().splitlines()
-    elif (
-        evidence_instance.document.name.endswith('.jpg') or
-        evidence_instance.document.name.endswith('.png') or
-        evidence_instance.document.name.endswith('.jpeg')
-      ):
-        filetype = 'image'
+    if os.path.isfile(evidence_instance.document.path):
+        if (
+                evidence_instance.document.name.endswith('.txt') or
+                evidence_instance.document.name.endswith('.log') or
+                evidence_instance.document.name.endswith('.ps1') or
+                evidence_instance.document.name.endswith('.py') or
+                evidence_instance.document.name.endswith('.md')
+        ):
+            filetype = 'text'
+            file_content = []
+            temp = evidence_instance.document.read().splitlines()
+            for line in temp:
+                try:
+                    file_content.append(line.decode())
+                except:
+                    file_content.append(line)
+
+        elif (
+            evidence_instance.document.name.endswith('.jpg') or
+            evidence_instance.document.name.endswith('.png') or
+            evidence_instance.document.name.endswith('.jpeg')
+        ):
+            filetype = 'image'
+        else:
+            filetype = 'unknown'
     else:
-        filetype = 'unknown'
+        filetype = 'text'
+        file_content = []
+        file_content.append("FILE NOT FOUND")
     context = {
                 'filetype': filetype,
                 'evidence': evidence_instance,
                 'file_content': file_content
               }
     return render(request, 'reporting/evidence_detail.html', context=context)
-
-
-@login_required
-def position_increase(request, pk):
-    """View function to increase a finding's position which moves it down the
-    list.
-    """
-    finding_instance = ReportFindingLink.objects.get(pk=pk)
-    finding_instance.position = finding_instance.position + 1
-    finding_instance.save(update_fields=['position'])
-    return HttpResponseRedirect(reverse('reporting:report_detail',
-                                args=(finding_instance.report.id,)))
-
-
-@login_required
-def position_decrease(request, pk):
-    """View function to decrease a finding's position which moves it up the
-    list.
-    """
-    finding_instance = ReportFindingLink.objects.get(pk=pk)
-    finding_instance.position = finding_instance.position - 1
-    finding_instance.save(update_fields=['position'])
-    return HttpResponseRedirect(reverse('reporting:report_detail',
-                                args=(finding_instance.report.id,)))
 
 
 @login_required
@@ -553,61 +661,85 @@ def generate_docx(request, pk):
         output_path,
         evidence_path,
         template_loc)
-    docx = spenny.generate_word_docx()
-    response = HttpResponse(
-        content_type='application/vnd.openxmlformats-officedocument.'
-        'wordprocessingml.document')
-    response['Content-Disposition'] = 'attachment; filename=report.docx'
-    docx.save(response)
-    return response
+    try:
+        docx = spenny.generate_word_docx()
+        response = HttpResponse(
+            content_type='application/vnd.openxmlformats-officedocument.'
+            'wordprocessingml.document')
+        response['Content-Disposition'] = 'attachment; filename=report.docx'
+        docx.save(response)
+        return response
+    except jinja2.exceptions.TemplateError as e:
+        messages.error(request, 'Failed to generate the Word report because the docx template contains invalid Jinja2 code:\n{}'.format(e),
+                extra_tags='alert-danger')
+    except jinja2.exceptions.Undefined as e:
+        messages.error(request, 'Failed to generate the Word report because the docx template contains an undefined Jinja2 variable:\n{}'.format(e),
+                extra_tags='alert-danger')
+    except PackageNotFoundError:
+        messages.error(request, 'Failed to generate the Word report because the docx template could not be found!',
+                extra_tags='alert-danger')
+    except Exception as e:
+        messages.error(request, 'Failed to generate the Word report for an unknown reason: {}'.format(e),
+                extra_tags='alert-danger')
+    return HttpResponseRedirect(request.META['HTTP_REFERER'])
 
 
 @login_required
 def generate_xlsx(request, pk):
     """View function to generate a xlsx report for the specified report."""
-    report_instance = Report.objects.get(pk=pk)
-    # Ask Spenny to make us a report with these findings
-    output_path = os.path.join(settings.MEDIA_ROOT, report_instance.title)
-    evidence_path = os.path.join(settings.MEDIA_ROOT)
-    template_loc = None
-    spenny = reportwriter.Reportwriter(
-        report_instance,
-        output_path,
-        evidence_path,
-        template_loc)
-    output = io.BytesIO()
-    workbook = Workbook(output, {'in_memory': True})
-    spenny.generate_excel_xlsx(workbook)
-    output.seek(0)
-    response = HttpResponse(
-        output.read(),
-        content_type='application/application/vnd.openxmlformats-'
-        'officedocument.spreadsheetml.sheet')
-    response['Content-Disposition'] = 'attachment; filename=report.xlsx'
-    output.close()
-    return response
+    try:
+        report_instance = Report.objects.get(pk=pk)
+        # Ask Spenny to make us a report with these findings
+        output_path = os.path.join(settings.MEDIA_ROOT, report_instance.title)
+        evidence_path = os.path.join(settings.MEDIA_ROOT)
+        template_loc = None
+        spenny = reportwriter.Reportwriter(
+            report_instance,
+            output_path,
+            evidence_path,
+            template_loc)
+        output = io.BytesIO()
+        workbook = Workbook(output, {'in_memory': True})
+        spenny.generate_excel_xlsx(workbook)
+        output.seek(0)
+        response = HttpResponse(
+            output.read(),
+            content_type='application/application/vnd.openxmlformats-'
+            'officedocument.spreadsheetml.sheet')
+        response['Content-Disposition'] = 'attachment; filename=report.xlsx'
+        output.close()
+        return response
+    except Exception as e:
+        messages.error(request, 'Failed to generate the Xlsx report: {}'.format(e),
+                extra_tags='alert-danger')
+        return HttpResponseRedirect(request.META['HTTP_REFERER'])
 
 
 @login_required
 def generate_pptx(request, pk):
     """View function to generate a pptx report for the specified report."""
-    report_instance = Report.objects.get(pk=pk)
-    # Ask Spenny to make us a report with these findings
-    output_path = os.path.join(settings.MEDIA_ROOT, report_instance.title)
-    evidence_path = os.path.join(settings.MEDIA_ROOT)
-    template_loc = os.path.join(settings.TEMPLATE_LOC, 'template.pptx')
-    spenny = reportwriter.Reportwriter(
-        report_instance,
-        output_path,
-        evidence_path,
-        template_loc)
-    pptx = spenny.generate_powerpoint_pptx()
-    response = HttpResponse(
-        content_type='application/application/vnd.openxmlformats-'
-        'officedocument.presentationml.presentation')
-    response['Content-Disposition'] = 'attachment; filename=report.pptx'
-    pptx.save(response)
-    return response
+    try:
+        report_instance = Report.objects.get(pk=pk)
+        # Ask Spenny to make us a report with these findings
+        output_path = os.path.join(settings.MEDIA_ROOT, report_instance.title)
+        evidence_path = os.path.join(settings.MEDIA_ROOT)
+        template_loc = os.path.join(settings.TEMPLATE_LOC, 'template.pptx')
+        spenny = reportwriter.Reportwriter(
+            report_instance,
+            output_path,
+            evidence_path,
+            template_loc)
+        pptx = spenny.generate_powerpoint_pptx()
+        response = HttpResponse(
+            content_type='application/application/vnd.openxmlformats-'
+            'officedocument.presentationml.presentation')
+        response['Content-Disposition'] = 'attachment; filename=report.pptx'
+        pptx.save(response)
+        return response
+    except Exception as e:
+        messages.error(request, 'Failed to generate the slide deck: {}'.format(e),
+                extra_tags='alert-danger')
+        return HttpResponseRedirect(request.META['HTTP_REFERER'])
 
 
 @login_required
@@ -630,38 +762,43 @@ def generate_json(request, pk):
 @login_required
 def generate_all(request, pk):
     """View function to generate all report types for the specified report."""
-    report_instance = Report.objects.get(pk=pk)
-    docx_template_loc = os.path.join(settings.TEMPLATE_LOC, 'template.docx')
-    pptx_template_loc = os.path.join(settings.TEMPLATE_LOC, 'template.pptx')
-    # Ask Spenny to make us reports with these findings
-    output_path = os.path.join(settings.MEDIA_ROOT, report_instance.title)
-    evidence_path = os.path.join(settings.MEDIA_ROOT)
-    template_loc = os.path.join(
-        settings.MEDIA_ROOT,
-        'templates',
-        'template.docx')
-    spenny = reportwriter.Reportwriter(
-        report_instance,
-        output_path,
-        evidence_path,
-        template_loc)
-    json_doc, word_doc, excel_doc, ppt_doc = spenny.generate_all_reports(
-        docx_template_loc,
-        pptx_template_loc)
-    # Create a zip file in memory and add the reports to it
-    zip_buffer = io.BytesIO()
-    zf = zipfile.ZipFile(zip_buffer, 'a')
-    zf.writestr('report.json', json_doc)
-    zf.writestr('report.docx', word_doc.getvalue())
-    zf.writestr('report.xlsx', excel_doc.getvalue())
-    zf.writestr('report.pptx', ppt_doc.getvalue())
-    zf.close()
-    zip_buffer.seek(0)
-    # Return the buffer in the HTTP response
-    response = HttpResponse(content_type='application/x-zip-compressed')
-    response['Content-Disposition'] = 'attachment; filename=reports.zip'
-    response.write(zip_buffer.read())
-    return response
+    try:
+        report_instance = Report.objects.get(pk=pk)
+        docx_template_loc = os.path.join(settings.TEMPLATE_LOC, 'template2.docx')
+        pptx_template_loc = os.path.join(settings.TEMPLATE_LOC, 'template.pptx')
+        # Ask Spenny to make us reports with these findings
+        output_path = os.path.join(settings.MEDIA_ROOT, report_instance.title)
+        evidence_path = os.path.join(settings.MEDIA_ROOT)
+        template_loc = os.path.join(
+            settings.MEDIA_ROOT,
+            'templates',
+            'template.docx')
+        spenny = reportwriter.Reportwriter(
+            report_instance,
+            output_path,
+            evidence_path,
+            template_loc)
+        json_doc, word_doc, excel_doc, ppt_doc = spenny.generate_all_reports(
+            docx_template_loc,
+            pptx_template_loc)
+        # Create a zip file in memory and add the reports to it
+        zip_buffer = io.BytesIO()
+        zf = zipfile.ZipFile(zip_buffer, 'a')
+        zf.writestr('report.json', json_doc)
+        zf.writestr('report.docx', word_doc.getvalue())
+        zf.writestr('report.xlsx', excel_doc.getvalue())
+        zf.writestr('report.pptx', ppt_doc.getvalue())
+        zf.close()
+        zip_buffer.seek(0)
+        # Return the buffer in the HTTP response
+        response = HttpResponse(content_type='application/x-zip-compressed')
+        response['Content-Disposition'] = 'attachment; filename=reports.zip'
+        response.write(zip_buffer.read())
+        return response
+    except:
+        messages.error(request, 'Failed to generate one or more documents for the archive',
+                extra_tags='alert-danger')
+        return HttpResponseRedirect(request.META['HTTP_REFERER'])
 
 
 @login_required
@@ -804,6 +941,17 @@ def convert_finding(request, pk):
         kwargs={'pk': new_finding_pk}))
 
 
+def export_findings_to_csv(request):
+    """View function to export the current findings table to a csv file."""
+    timestamp = datetime.now().isoformat()
+    fiinding_resource = FindingResource()
+    dataset = fiinding_resource.export()
+    response = HttpResponse(dataset.csv, content_type='text/csv')
+    response["Content-Disposition"] = f"attachment; filename={timestamp}_findings.csv"
+
+    return response
+
+
 ################
 # View Classes #
 ################
@@ -904,7 +1052,33 @@ class ReportCreate(LoginRequiredMixin, CreateView):
             project.start_date)
         return {
                 'title': title,
+                'project': project
                }
+
+    def get_success_url(self):
+        """Override the function to return to the new record after creation."""
+        self.request.session['active_report']['id'] = self.object.pk
+        self.request.session.modified = True
+        messages.success(self.request, 'New report was successfully created '
+                         'and is now your active report.',
+                         extra_tags='alert-success')
+        return reverse('reporting:report_detail', kwargs={'pk': self.object.pk})
+
+
+class ReportCreateWithoutProject(LoginRequiredMixin, CreateView):
+    """View for creating new reports. This view defaults to the
+    report_form.html template. This version applies no default values.
+    """
+    model = Report
+    form_class = ReportCreateForm
+
+    def form_valid(self, form):
+        """Override form_valid to perform additional actions on new entries."""
+        from ghostwriter.rolodex.models import Project
+        form.instance.created_by = self.request.user
+        self.request.session['active_report'] = {}
+        self.request.session['active_report']['title'] = form.instance.title
+        return super().form_valid(form)
 
     def get_success_url(self):
         """Override the function to return to the new record after creation."""
@@ -1051,7 +1225,7 @@ class EvidenceDelete(LoginRequiredMixin, DeleteView):
         messages.warning(self.request, '%s was removed from this report and '
                          'the associated file has been deleted.' %
                          self.get_object().friendly_name,
-                         extra_tags='alert-warning')
+                         extra_tags='alert-success')
         return reverse(
             'reporting:report_detail',
             kwargs={'pk': self.object.finding.report.pk})
@@ -1064,7 +1238,8 @@ class EvidenceDelete(LoginRequiredMixin, DeleteView):
             settings.MEDIA_ROOT,
             self.get_object().document.name)
         directory = os.path.dirname(full_path)
-        os.remove(full_path)
+        if os.path.isfile(full_path):
+            os.remove(full_path)
         # Try to delete the directory tree if this was the last/only file
         try:
             os.removedirs(directory)

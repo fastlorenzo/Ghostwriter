@@ -22,6 +22,8 @@ urlpatterns = [
     path('user/active_assets', views.user_assets, name='user_assets'),
     path('ajax/load_projects/', views.ajax_load_projects,
          name='ajax_load_projects'),
+    path('ajax/load_project/', views.ajax_load_project,
+         name='ajax_load_project'),
 ]
 
 # URLs for domain status change functions
@@ -38,7 +40,9 @@ urlpatterns += [
     path('servers/<int:pk>/checkout', views.ServerHistoryCreate.as_view(),
          name='server_checkout'),
     path('servers/<int:pk>/release', views.server_release,
-         name='server_release')
+         name='server_release'),
+    path('servers/search', views.server_search,
+         name='server_search')
 ]
 
 # URLs for creating, updating, and deleting domains
@@ -88,6 +92,12 @@ urlpatterns += [
          views.DomainServerConnectionDelete.as_view(),
          name='link_delete'),
     path('servers/import/', views.import_servers, name='server_import'),
+    path('servers/<int:pk>/add_address/', views.AuxServerAddressCreate.as_view(),
+         name='server_address_add'),
+    path('servers/<int:pk>/edit_address/', views.AuxServerAddressUpdate.as_view(),
+         name='server_address_edit'),
+    path('servers/<int:pk>/delete_address/', views.AuxServerAddressDelete.as_view(),
+         name='server_address_delete'),
 ]
 
 # URLs for creating, updating, and deleting project histories

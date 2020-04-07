@@ -205,6 +205,17 @@ class Domain(models.Model):
         help_text='Include details such as how the domain was detected, why '
                   'it was blacklisted for spam, if it was flagged with a bad '
                   'category, etc.')
+    auto_renew = models.BooleanField(
+        'Auto Renew',
+        default=True,
+        help_text='Whether or not the domain is set to renew automatically '
+                  'with the registrar'
+    )
+    expired = models.BooleanField(
+        'Expiration Status',
+        default=False,
+        help_text='Whether or not the domain registration has expired'
+    )
     # Foreign Keys
     whois_status = models.ForeignKey(
         'WhoisStatus',
@@ -256,7 +267,8 @@ class Domain(models.Model):
         """Check if the domain's expiration date is in the past."""
         expired = False
         if datetime.date.today() > self.expiration:
-            expired = True
+            if not self.auto_renew:
+                expired = True
         return expired
 
     @property
@@ -321,7 +333,6 @@ class History(models.Model):
         'ActivityType',
         on_delete=models.PROTECT,
         null=False,
-        blank=True,
         help_text='Select the intended use of this domain')
 
     class Meta:
@@ -423,6 +434,13 @@ class StaticServer(models.Model):
         blank=True,
         help_text='Use this area to provide server-related notes, such as '
                   'its designated use or how it can be used')
+    name = models.CharField(
+        'Name',
+        max_length=100,
+        null=True,
+        blank=True,
+        help_text='Enter the server\'s name (typically hostname)')
+
     # Foreign Keys
     server_status = models.ForeignKey(
         ServerStatus,
@@ -453,7 +471,7 @@ class StaticServer(models.Model):
 
     def __str__(self):
         """String for representing the model object (in Admin site etc.)."""
-        return f'{self.ip_address} ({self.server_provider})'
+        return f'{self.ip_address} ({self.name}) [{self.server_provider}]'
 
 
 class ServerRole(models.Model):
@@ -523,13 +541,11 @@ class ServerHistory(models.Model):
         'ServerRole',
         on_delete=models.PROTECT,
         null=False,
-        blank=True,
         help_text='Select the intended role the server will play')
     activity_type = models.ForeignKey(
         'ActivityType',
         on_delete=models.PROTECT,
         null=False,
-        blank=True,
         help_text='Select the intended activity to be performed by the server')
 
     class Meta:
@@ -544,7 +560,7 @@ class ServerHistory(models.Model):
 
     def __str__(self):
         """String for representing the model object (in Admin site etc.)."""
-        return f'{self.server.ip_address} ({self.activity_type.activity})'
+        return f'{self.server.ip_address} ({self.server.name}) [{self.activity_type.activity}]'
 
     @property
     def will_be_released(self):
@@ -569,6 +585,12 @@ class TransientServer(models.Model):
         max_length=100,
         unique=True,
         help_text='Enter the server IP address')
+    name = models.CharField(
+        'Name',
+        max_length=100,
+        null=True,
+        blank=True,
+        help_text='Enter the server\'s name (typically hostname)')
     note = models.TextField(
         'Notes',
         null=True,
@@ -607,13 +629,13 @@ class TransientServer(models.Model):
 
     class Meta:
         """Metadata for the model."""
-        ordering = ['project', 'server_provider', 'ip_address', 'server_role']
+        ordering = ['project', 'server_provider', 'ip_address', 'server_role', 'name']
         verbose_name = 'Virtual private server'
         verbose_name_plural = 'Virtual private servers'
 
     def __str__(self):
         """String for representing the model object (in Admin site etc.)."""
-        return f'{self.ip_address} ({self.server_provider})'
+        return f'{self.ip_address} ({self.name}) [{self.server_provider}]'
 
 
 class DomainServerConnection(models.Model):
@@ -737,3 +759,34 @@ class ServerNote(models.Model):
     def __str__(self):
         """String for representing the model object (in Admin site etc.)."""
         return f'{self.server} {self.timestamp}: {self.note}'
+
+
+class AuxServerAddress(models.Model):
+    """Model representing auxiliary IP addresses for servers.
+
+    There are foreign keys for the `StaticServer` model.
+    """
+    ip_address = models.GenericIPAddressField(
+        'IP Address',
+        max_length=100,
+        unique=True,
+        help_text='Enter the auxiliary IP address for the server')
+    primary = models.BooleanField(
+        'Primary Address',
+        default=False,
+        help_text='Mark the address as the server\'s primary address')
+    # Foreign Keys
+    static_server = models.ForeignKey(
+        StaticServer,
+        on_delete=models.CASCADE,
+        null=False)
+
+    class Meta:
+        """Metadata for the model."""
+        ordering = ['static_server', 'ip_address']
+        verbose_name = 'Auxiliary IP address'
+        verbose_name_plural = 'Auxiliary IP addresses'
+
+    def __str__(self):
+        """String for representing the model object (in Admin site etc.)."""
+        return f'{self.ip_address}'

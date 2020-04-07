@@ -10,6 +10,7 @@ from django.urls import reverse
 from django.views import generic
 from django.contrib import messages
 from django.shortcuts import render
+from django.core import serializers
 from django.urls import reverse_lazy
 from django.views.generic.edit import CreateView, UpdateView, DeleteView
 
@@ -18,7 +19,7 @@ from django.contrib.auth.decorators import login_required
 from django.contrib.auth.mixins import LoginRequiredMixin
 
 # Django imports for forms
-from django.http import HttpResponseRedirect
+from django.http import HttpResponseRedirect, HttpResponse
 from django.shortcuts import get_object_or_404
 
 # Import additional models
@@ -44,6 +45,17 @@ logger = logging.getLogger(__name__)
 ##################
 # View Functions #
 ##################
+
+
+@login_required
+def ajax_load_project(request):
+    """View function used with AJAX for retrieving project details.
+    Used in assignment forms to set the default assignment dates.
+    """
+    project_id = request.GET.get('project')
+    project = Project.objects.filter(id=project_id)
+    data = serializers.serialize('json', project)
+    return HttpResponse(data, content_type='application/json')
 
 
 @login_required
@@ -187,31 +199,31 @@ def set_objective_status(request, pk, status):
                 messages.success(request, '"%s" is now Active.' %
                                     project_objective.objective,
                                     extra_tags='alert-success')
-                return HttpResponseRedirect(reverse('rolodex:project_detail',
-                                            args=(project_objective.project.pk, )))
             elif status == "onhold":
                 project_objective.status = ObjectiveStatus.objects.get(pk=2)
                 project_objective.save()
                 messages.success(request, '"%s" is now On Hold.' %
                                     project_objective.objective,
                                     extra_tags='alert-success')
-                return HttpResponseRedirect(reverse('rolodex:project_detail',
-                                            args=(project_objective.project.pk, )))
-            if status == "complete":
+            elif status == "complete":
                 project_objective.status = ObjectiveStatus.objects.get(pk=3)
                 project_objective.save()
                 messages.success(request, '"%s" is now Complete.' %
                                     project_objective.objective,
                                     extra_tags='alert-success')
-                return HttpResponseRedirect(reverse('rolodex:project_detail',
-                                            args=(project_objective.project.pk, )))
             else:
                 messages.error(
                     request,
                     'You provided an invalid objective status ¯\_(ツ)_/¯',
                     extra_tags='alert-danger')
-                return HttpResponseRedirect(reverse('rolodex:project_detail',
-                                            args=(project_objective.project.pk, )))
+            return HttpResponseRedirect(
+                '{}#collapseObjectives'.format(
+                    reverse(
+                        'rolodex:project_detail',
+                        kwargs={'pk': project_objective.project.pk}
+                    )
+                )
+            )
         else:
             messages.error(request, 'The specified report does not exist!',
                             extra_tags='alert-danger')
@@ -255,7 +267,6 @@ class ClientDetailView(LoginRequiredMixin, generic.DetailView):
         client_vps = []
         for project in projects:
             vps_queryset = TransientServer.objects.filter(project=project)
-            print(vps_queryset)
             for vps in vps_queryset:
                 client_vps.append(vps)
         ctx['domains'] = client_domains
@@ -297,7 +308,7 @@ class ClientUpdate(LoginRequiredMixin, UpdateView):
     form_class = ClientCreateForm
 
     def get_success_url(self):
-        """Override the function to return to the new record after creation."""
+        """Override the function to return to the new record after updating."""
         return reverse('rolodex:client_detail', kwargs={'pk': self.object.pk})
 
     def get_initial(self):
@@ -343,6 +354,10 @@ class ProjectCreate(LoginRequiredMixin, CreateView):
 
     def get_success_url(self):
         """Override the function to return to the new record after creation."""
+        messages.success(
+            self.request,
+            'Project successfully created for this client.',
+            extra_tags='alert-success')
         return reverse('rolodex:project_detail', kwargs={'pk': self.object.pk})
 
     def form_valid(self, form):
@@ -375,6 +390,35 @@ class ProjectCreate(LoginRequiredMixin, CreateView):
         return ctx
 
 
+class ProjectCreateWithoutClient(LoginRequiredMixin, CreateView):
+    """View for creating new projects. This view defaults to the
+    project_form.html template. This version applies no default values.
+    """
+    model = Project
+    form_class = ProjectCreateForm
+
+    def get_success_url(self):
+        """Override the function to return to the new record after creation."""
+        messages.success(
+            self.request,
+            'Project successfully created for the selected client.',
+            extra_tags='alert-success')
+        return reverse('rolodex:project_detail', kwargs={'pk': self.object.pk})
+
+    def form_valid(self, form):
+        """Override form_valid to perform additional actions on new entries."""
+        # Generate and assign a unique codename to the project
+        codename_verified = False
+        while not codename_verified:
+            new_codename = codenames.codename(uppercase=True)
+            try:
+                Project.objects.filter(codename__iequal=new_codename)
+            except Exception:
+                codename_verified = True
+        form.instance.codename = new_codename
+        return super().form_valid(form)
+
+
 class ProjectUpdate(LoginRequiredMixin, UpdateView):
     """View for updating existing project entries. This view defaults to the
     project_form.html template.
@@ -382,9 +426,26 @@ class ProjectUpdate(LoginRequiredMixin, UpdateView):
     model = Project
     form_class = ProjectCreateForm
 
+    def get_context_data(self, **kwargs):
+        """Override the `get_context_data()` function to provide additional
+        information.
+        """
+        ctx = super(ProjectUpdate, self).get_context_data(**kwargs)
+        ctx['origin'] = self.request.META.get('HTTP_REFERER')
+        return ctx
+
     def get_success_url(self):
-        """Override the function to return to the new record after creation."""
-        return reverse('rolodex:project_detail', kwargs={'pk': self.object.pk})
+        """Override the function to return to the parent record after updating."""
+        messages.success(
+            self.request,
+            'Project successfully updated.',
+            extra_tags='alert-success')
+        next_url = self.request.POST.get('next', '/')
+        if next_url:
+            if '/domains/' in next_url:
+                return '{}#collapseHistory'.format(next_url)
+        else:
+            return reverse('rolodex:project_detail', kwargs={'pk': self.object.pk})
 
     def get_initial(self):
         """Set the initial values for the form."""
@@ -400,7 +461,6 @@ class ProjectDelete(LoginRequiredMixin, DeleteView):
     """
     model = Project
     template_name = 'confirm_delete.html'
-    success_url = reverse_lazy('rolodex:projects')
 
     def get_context_data(self, **kwargs):
         """Override the `get_context_data()` function to provide additional
@@ -413,6 +473,9 @@ class ProjectDelete(LoginRequiredMixin, DeleteView):
         ctx['object_to_be_deleted'] = queryset
         return ctx
 
+    def get_success_url(self):
+        """Override the function to return to the parent record after deletion."""
+        return '{}#collapseHistory'.format(reverse('rolodex:client_detail', kwargs={'pk': self.object.client.id}))
 
 class ClientContactCreate(LoginRequiredMixin, CreateView):
     """View for creating new POC entries. This view defaults to the
@@ -424,7 +487,7 @@ class ClientContactCreate(LoginRequiredMixin, CreateView):
 
     def get_success_url(self):
         """Override the function to return to the new record after creation."""
-        return reverse('rolodex:client_detail', kwargs={'pk': self.object.client.id})
+        return '{}#collapsePOC'.format(reverse('rolodex:client_detail', kwargs={'pk': self.object.client.id}))
 
     def get_initial(self):
         """Set the initial values for the form."""
@@ -453,8 +516,8 @@ class ClientContactUpdate(LoginRequiredMixin, UpdateView):
     template_name = 'rolodex/contact_form.html'
 
     def get_success_url(self):
-        """Override the function to return to the new record after creation."""
-        return reverse('rolodex:client_detail', kwargs={'pk': self.object.client.pk})
+        """Override the function to return to the new record after updating."""
+        return '{}#collapsePOC'.format(reverse('rolodex:client_detail', kwargs={'pk': self.object.client.id}))
 
 
 class ClientContactDelete(LoginRequiredMixin, DeleteView):
@@ -466,7 +529,7 @@ class ClientContactDelete(LoginRequiredMixin, DeleteView):
 
     def get_success_url(self):
         """Override the function to return to the parent record after deletion."""
-        return reverse('rolodex:client_detail', kwargs={'pk': self.object.client.pk})
+        return '{}#collapsePOC'.format(reverse('rolodex:client_detail', kwargs={'pk': self.object.client.id}))
 
     def get_context_data(self, **kwargs):
         """Override the `get_context_data()` function to provide additional
@@ -489,7 +552,9 @@ class AssignmentCreate(LoginRequiredMixin, CreateView):
 
     def get_success_url(self):
         """Override the function to return to the new record after creation."""
-        return reverse('rolodex:project_detail', kwargs={'pk': self.object.project.id})
+        return '{}#collapseOperators'.format(
+            reverse('rolodex:project_detail', kwargs={'pk': self.object.project.id})
+        )
 
     def get_initial(self):
         """Set the initial values for the form."""
@@ -518,8 +583,10 @@ class AssignmentUpdate(LoginRequiredMixin, UpdateView):
     template_name = 'rolodex/assignment_form.html'
 
     def get_success_url(self):
-        """Override the function to return to the new record after creation."""
-        return reverse('rolodex:project_detail', kwargs={'pk': self.object.project.id})
+        """Override the function to return to the new record after updating."""
+        return '{}#collapseOperators'.format(
+            reverse('rolodex:project_detail', kwargs={'pk': self.object.project.id})
+        )
 
 
 class AssignmentDelete(LoginRequiredMixin, DeleteView):
@@ -531,7 +598,9 @@ class AssignmentDelete(LoginRequiredMixin, DeleteView):
 
     def get_success_url(self):
         """Override the function to return to the parent record after deletion."""
-        return reverse('rolodex:project_detail', kwargs={'pk': self.object.project.id})
+        return '{}#collapseOperators'.format(
+            reverse('rolodex:project_detail', kwargs={'pk': self.object.project.id})
+        )
 
     def get_context_data(self, **kwargs):
         """Override the `get_context_data()` function to provide additional
@@ -561,7 +630,9 @@ class ClientNoteCreate(LoginRequiredMixin, CreateView):
             self.request,
             'Note successfully added to this client.',
             extra_tags='alert-success')
-        return reverse('rolodex:client_detail', kwargs={'pk': self.object.client.id})
+        return '{}#collapseNotes'.format(
+            reverse('rolodex:client_detail', kwargs={'pk': self.object.client.id})
+        )
 
     def get_initial(self):
         """Set the initial values for the form."""
@@ -591,12 +662,14 @@ class ClientNoteUpdate(LoginRequiredMixin, UpdateView):
     template_name = 'note_form.html'
 
     def get_success_url(self):
-        """Override the function to return to the new record after creation."""
+        """Override the function to return to the new record after updating."""
         messages.success(
             self.request,
             'Note successfully updated.',
             extra_tags='alert-success')
-        return reverse('rolodex:client_detail', kwargs={'pk': self.object.client.pk})
+        return '{}#collapseNotes'.format(
+            reverse('rolodex:client_detail', kwargs={'pk': self.object.client.id})
+        )
 
 
 class ClientNoteDelete(LoginRequiredMixin, DeleteView):
@@ -612,7 +685,9 @@ class ClientNoteDelete(LoginRequiredMixin, DeleteView):
             self.request,
             'Note successfully deleted.',
             extra_tags='alert-warning')
-        return reverse('rolodex:client_detail', kwargs={'pk': self.object.client.pk})
+        return '{}#collapseNotes'.format(
+            reverse('rolodex:client_detail', kwargs={'pk': self.object.client.id})
+        )
 
     def get_context_data(self, **kwargs):
         """Override the `get_context_data()` function to provide additional
@@ -639,7 +714,9 @@ class ProjectNoteCreate(LoginRequiredMixin, CreateView):
             self.request,
             'Note successfully added to this project.',
             extra_tags='alert-success')
-        return reverse('rolodex:project_detail', kwargs={'pk': self.object.project.id})
+        return '{}#collapseNotes'.format(
+            reverse('rolodex:project_detail', kwargs={'pk': self.object.project.id})
+        )
 
     def get_initial(self):
         """Set the initial values for the form."""
@@ -669,12 +746,14 @@ class ProjectNoteUpdate(LoginRequiredMixin, UpdateView):
     template_name = 'note_form.html'
 
     def get_success_url(self):
-        """Override the function to return to the new record after creation."""
+        """Override the function to return to the new record after updating."""
         messages.success(
             self.request,
             'Note successfully updated.',
             extra_tags='alert-success')
-        return reverse('rolodex:project_detail', kwargs={'pk': self.object.project.id})
+        return '{}#collapseNotes'.format(
+            reverse('rolodex:project_detail', kwargs={'pk': self.object.project.id})
+        )
 
 
 class ProjectNoteDelete(LoginRequiredMixin, DeleteView):
@@ -690,7 +769,9 @@ class ProjectNoteDelete(LoginRequiredMixin, DeleteView):
             self.request,
             'Note successfully deleted.',
             extra_tags='alert-warning')
-        return reverse('rolodex:project_detail', kwargs={'pk': self.object.project.id})
+        return '{}#collapseNotes'.format(
+            reverse('rolodex:project_detail', kwargs={'pk': self.object.project.id})
+        )
 
     def get_context_data(self, **kwargs):
         """Override the `get_context_data()` function to provide additional
@@ -714,7 +795,9 @@ class ProjectObjectiveCreate(LoginRequiredMixin, CreateView):
             self.request,
             'Objective successfully added to this project.',
             extra_tags='alert-success')
-        return reverse('rolodex:project_detail', kwargs={'pk': self.object.project.id})
+        return '{}#collapseObjectives'.format(
+            reverse('rolodex:project_detail', kwargs={'pk': self.object.project.id})
+        )
 
     def get_initial(self):
         """Set the initial values for the form."""
@@ -743,12 +826,14 @@ class ProjectObjectiveUpdate(LoginRequiredMixin, UpdateView):
     template_name = 'rolodex/objective_form.html'
 
     def get_success_url(self):
-        """Override the function to return to the new record after creation."""
+        """Override the function to return to the new record after updating."""
         messages.success(
             self.request,
             'Objective successfully updated.',
             extra_tags='alert-success')
-        return reverse('rolodex:project_detail', kwargs={'pk': self.object.project.id})
+        return '{}#collapseObjectives'.format(
+            reverse('rolodex:project_detail', kwargs={'pk': self.object.project.id})
+        )
 
 
 class ProjectObjectiveDelete(LoginRequiredMixin, DeleteView):
@@ -764,7 +849,9 @@ class ProjectObjectiveDelete(LoginRequiredMixin, DeleteView):
             self.request,
             'Note successfully deleted.',
             extra_tags='alert-warning')
-        return reverse('rolodex:project_detail', kwargs={'pk': self.object.project.id})
+        return '{}#collapseObjectives'.format(
+            reverse('rolodex:project_detail', kwargs={'pk': self.object.project.id})
+        )
 
     def get_context_data(self, **kwargs):
         """Override the `get_context_data()` function to provide additional

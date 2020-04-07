@@ -3,6 +3,144 @@
 
 {% block pagetitle %}Finding Entry{% endblock %}
 
+{% block tinymcejs %}
+    <script>
+        tinymce.init({
+            selector:'textarea',
+            height: '300',
+            width: '100%',
+            plugins: 'lists image hr autosave advlist code wordcount codesample searchreplace paste',
+            toolbar: 'bold italic bullist numlist codesample codeBlock codeInline evidenceUpload removeformat searchreplace',
+            menubar: 'file edit tools',
+            paste_data_images: false,
+            paste_as_text: true,
+            browser_spellcheck: true,
+            setup: function (editor) {
+                editor.ui.registry.addButton('codeInline', {
+                    icon: 'sourcecode',
+                    text: 'Inline Code',
+                    tooltip: 'Format selected text as inline code',
+                    onAction: function (_) {
+                        tinymce.activeEditor.formatter.toggle('code')
+                    },
+                });
+
+                // https://www.martyfriedel.com/blog/tinymce-5-url-dialog-component-and-window-messaging
+                editor.ui.registry.addButton('evidenceUpload', {
+                    icon: 'upload',
+                    text: 'Upload Evidence',
+                    tooltip: 'Attach an evidence file to this finding to reference in the editor',
+                    onAction: function () {
+                        _dialog = editor.windowManager.openUrl({
+                            title: 'Upload Evidence',
+                            url: '{% url "reporting:upload_evidence_modal" reportfindinglink.id %}',
+                            height: 1100,
+                            width: 1000,
+                            buttons: [
+                                {
+                                    type: 'custom',
+                                    name: 'action',
+                                    text: 'Upload & Insert Evidence',
+                                    primary: true,
+                                },
+                                {
+                                    type: 'cancel',
+                                    name: 'cancel',
+                                    text: 'Close'
+                                }
+                            ],
+                            onAction: function (instance, trigger) {
+                                instance.sendMessage({
+                                    mceAction: 'evidence_upload'
+                                });
+                            }
+                        });
+                    },
+                });
+
+                editor.addCommand('upload_and_insert', function(ui, value) {
+                    if (value.friendly_name == '' || value.evidence_file == '' || value.caption == '')
+                    {
+                        // editor.windowManager.alert('The form is incomplete. You need a file, friendly name, and a caption.');
+                    }
+                    else
+                    {
+                        if (value.used_friendly_names.includes(value.friendly_name)) {
+                            // Do nothing – this is client-side validation that the same friendly name
+                            // is not being used for two uploads
+                            // This is NOT the primary validation, so client-side isn't a concern
+                            // This just prevents the JS code from proceeding in the event the form
+                            // submission is kicked back for name reuse
+                        } else {
+                            var evidence_placeholder = `\{\{.${value.friendly_name}\}\}`;
+                            editor.insertContent(`\n<p>\{\{.${value.friendly_name}\}\}</p>`);
+                            // A brief block to prevent users from jamming the close button immediately
+                            _dialog.block('Uploading...');
+                            setTimeout(() => {
+                                _dialog.unblock();
+                            }, 1000);
+                            // Push the new evidence into the AutoComplete dict
+                            evidenceFiles.push({ text: evidence_placeholder, value: evidence_placeholder })
+                        }
+                    }
+                });
+
+                editor.ui.registry.addAutocompleter('evidence', {
+                    ch: '@',
+                    minChars: 1,
+                    columns: 1,
+                    fetch: function (pattern) {
+                        var matchedChars = evidenceFiles.filter(function (quote) {
+                            return quote.text.indexOf(pattern) !== -1;
+                        });
+                        return new tinymce.util.Promise(function (resolve) {
+                            var results = matchedChars.map(function (quote) {
+                                return {
+                                    value: quote.value,
+                                    text: quote.text
+                                }
+                            });
+                            resolve(results);
+                        });
+                    },
+                    onAction: function (autocompleteApi, rng, value) {
+                        editor.selection.setRng(rng);
+                        editor.insertContent(value);
+                        autocompleteApi.hide();
+                    }
+                });
+            },
+            content_style: '.left { text-align: left; }' +
+                'img.left { float: left; }' +
+                'table.left { float: left; }' +
+                '.right { text-align: right; }' +
+                'img.right { float: right; }' +
+                'table.right { float: right; }' +
+                '.center { text-align: center; }' +
+                'img.center { display: block; margin: 0 auto; }' +
+                'table.center { display: block; margin: 0 auto; }' +
+                '.full { text-align: justify; }' +
+                'img.full { display: block; margin: 0 auto; }' +
+                'table.full { display: block; margin: 0 auto; }' +
+                '.bold { font-weight: bold; }' +
+                '.italic { font-style: italic; }' +
+                '.underline { text-decoration: underline; }' +
+                '.example1 {}' +
+                '.tablerow1 { background-color: #D3D3D3; }',
+            formats: {
+                alignleft: { selector: 'p,h1,h2,h3,h4,h5,h6,td,th,div,ul,ol,li,table,img', classes: 'left' },
+                aligncenter: { selector: 'p,h1,h2,h3,h4,h5,h6,td,th,div,ul,ol,li,table,img', classes: 'center' },
+                alignright: { selector: 'p,h1,h2,h3,h4,h5,h6,td,th,div,ul,ol,li,table,img', classes: 'right' },
+                alignfull: { selector: 'p,h1,h2,h3,h4,h5,h6,td,th,div,ul,ol,li,table,img', classes: 'full' },
+                bold: { inline: 'span', classes: 'bold' },
+                italic: { inline: 'span', classes: 'italic' },
+                underline: { inline: 'span', classes: 'underline', exact: true },
+                strikethrough: { inline: 'del' }
+            },
+        });
+    </script>
+{% endblock %}
+
 {% block breadcrumbs %}
     <nav aria-label="breadcrumb" style="padding-left: 20px;">
         <ul class="breadcrumb" style="margin: 0;">
@@ -20,42 +158,32 @@
         <div class="card">
             <div class="card-header" id="keyword" data-toggle="collapse" data-target="#collapseKeyword">
                 <a class="accordion-toggle btn btn-link" data-toggle="collapse" data-target="#collapseKeyword" aria-expanded="false" aria-controls="collapseKeyword">
-                    <i class="fas fa-code"></i> Keyword Reference
+                    <i class="fas fa-code"></i> Keyword Reference & Instuctions
                 </a>
             </div>
             <div id="collapseKeyword" class="collapse" aria-labelledby="keyword" data-parent="#accordion">
                 <div class="card-body">
-                    <p>Ghostwriter supports various template keywords you may utilize to format text and insert various pieces of information:</p>
-                    {% verbatim %}
-                        <table style="width: 50%; margin-left: 25%;">
+                    <p>Ghostwriter supports several template keywords you may utilize to format text and insert various pieces of information. Begin typing <strong>@</strong> to open the autocomplete dialog for keywords.</p>
+                        <table style="width: 70%; margin-left: 15%;">
                             <tr>
-                                <th class="smallCell">Keyword</th>
+                                <th class="smallCell" style="width: 33%">Keyword</th>
                                 <th>Usage</th>
                             </tr>
                             <tr>
-                                <td>{{.client}}</td>
-                                <td style="text-align: left">This keyword will be replaced with the client's short name. The full name will be used if a short name has not been set for the client.</td>
+                                {% verbatim %}<td>{{.client}}</td>{% endverbatim %}
+                                <td style="text-align: left">
+                                    {% if reportfindinglink.report.project.client.short_name %}
+                                        This keyword will be replaced with the client's short name, "{{ reportfindinglink.report.project.client.short_name }}."
+                                    {% else %}
+                                        No short name is set for this client, so this keyword will be replaced by the full name, "{{ reportfindinglink.report.project.client.name }}."
+                                    {% endif %}
+                                </td>
                             </tr>
-                            <tr>
-                                <td>{{.code_block}} & {{.end_code_block}}</td>
-                                <td style="text-align: left">Wrap text with these keywords to transform the text into a code block within the finding text (alternative to attaching a text file as evidence). Place the <em>{{.end_code_block}}</em> keyword on a new line.</td>
-                            </tr>
+                        {% verbatim %}
                             <tr>
                                 <td>{{.caption}}</td>
                                 <td style="text-align: left">Start a line of text with this keyword to make it a caption. This is intended to follow a code block.</td>
-                            </tr>
-                            <tr>
-                                <td>{{.inline_code}} & {{.end_inline_code}}</td>
-                                <td style="text-align: left">Wrap text with these keywords to format the text using the template's "Code (inline)" style. This is useful for highlighting code/commands without creating a figure.</td>
-                            </tr>
-                            <tr>
-                                <td>{{.bulleted_list}} & {{.end_bulleted_list}}</td>
-                                <td style="text-align: left">Wrap text with these keywords to transform the text into a bulleted list. Each new line between the keywords will be a bullet. Place the <em>{{.end_bulleted_list}}</em> keyword on a new line.</td>
-                            </tr>
-                            <tr>
-                                <td>{{.numbered_list}} & {{.end_numbered_list}}</td>
-                                <td style="text-align: left">Wrap text with these keywords to transform the text into a numbered list. Each new line between the keywords will be a sequentially numbered line. Place the <em>{{.end_numbered_list}}</em> keyword on a new line.</td>
-                            </tr>                        
+                            </tr>                       
                         {% endverbatim %}
                         {% if reportfindinglink.evidence_set.all  %}
                             {% for finding in reportfindinglink.evidence_set.all %}
@@ -63,11 +191,19 @@
                                     <td>
                                         {% templatetag openvariable %}.{{ finding.friendly_name }}{% templatetag closevariable %}
                                     </td>
-                                    <td style="text-align: left">On a new line, reference this evidence file, <em>{{ finding.document.name }}</em>, by its "Friendly Name" to place it in the finding's text - e.g. <em>{% templatetag openvariable %}.{{ finding.friendly_name }}{% templatetag closevariable %}</em>.</td>
+                                    <td style="text-align: left">On a new line, reference this evidence file, <em>{{ finding.document.name }}</em>, to insert it into the finding.</td>
                                 </tr>
                             {% endfor %}
                         {% endif %}
                     </table>
+                    <p>
+                        Insert evidence by using the above keywords. Image evidence may be inserted and previewed inline by clicking the WYSIWIG editor's image button and entering the evidence image's Ghostwriter URL (e.g., <em>https://ghosttwriter.local/media/evidence/2/ghostwriter.png</em>).
+                        Inserting an external image's URL will work but these images <strong><em><u>will not be</u></em></strong> carried over to the report outputs. 
+                    </p>
+                    <p>
+                        For additional formatting, utilize the WYSIWIG HTML formatting to apply bold, italic, code, and inline code text styles.<br />
+                        These styles will carry over to the Word report output as bold, italic, "CodeBlock," and "Code (Inline)" styles respectively.
+                    </p>
                 </div>
             </div>
         </div>
@@ -116,7 +252,7 @@
                                         </div>
                                     </div>
                                 {% endif %}
-                                <p>{{ note.note|linebreaksbr }}</p>
+                                <p>{{ note.note|safe }}</p>
                                 <span class="time-right">{{ note.operator.username }}</span>
                             </div>
                         {% endfor %}
@@ -232,4 +368,19 @@
         <input type="submit" class="btn btn-primary" value="Save">
         <button onclick="window.history.back();" class="btn btn-secondary" type="button">Cancel</button>
     </form>
+{% endblock %}
+
+{% block morescripts %}
+    <!-- Script for the WYSIWYG editors' AutoComplete -->
+    <script>
+        var evidenceFiles = [
+            { text: '\{\{.client\}\}', value: '\{\{.client\}\}' },
+            { text: '\{\{.caption\}\}', value: '\{\{.caption\}\}' },
+            {% if reportfindinglink.evidence_set.all  %}
+                {% for finding in reportfindinglink.evidence_set.all %}
+                    { text: '\{\{.{{ finding.friendly_name }}\}\}', value: '\{\{.{{ finding.friendly_name }}\}\}' },
+                {% endfor %}
+            {% endif %}
+        ];
+    </script>
 {% endblock %}

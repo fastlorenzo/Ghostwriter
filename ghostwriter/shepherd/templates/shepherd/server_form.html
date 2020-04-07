@@ -8,7 +8,7 @@
         <ul class="breadcrumb" style="margin: 0;">
             <li class="breadcrumb-item"><a href="{% url 'home:dashboard' %}">Dashboard</a></li>
             <li class="breadcrumb-item"><a href="{% url 'shepherd:servers' %}">Servers</a></li>
-            <li class="breadcrumb-item active" aria-current="page">New Server</li>
+            <li class="breadcrumb-item active" aria-current="page">Server Form</li>
         </ul>
     </nav>
 {% endblock %}
@@ -46,6 +46,9 @@
         <hr>
 
         {{ form.ip_address|as_crispy_field }}
+        
+        {{ form.name|as_crispy_field }}
+
         <div class="form-row justify-content-center">
             <div class="form-group col-md-6 mb-0">
                 {{ form.server_status|as_crispy_field }}

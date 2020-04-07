@@ -5,10 +5,14 @@ from django.core.exceptions import ValidationError
 from django.utils.translation import ugettext_lazy as _
 
 from crispy_forms.helper import FormHelper
+from crispy_forms.layout import Layout, Submit, Row, Column
 
-from .models import Domain, History, DomainNote, DomainServerConnection
+from datetime import date
+
+from .models import (Domain, History, DomainNote, DomainServerConnection, 
+                     DomainStatus)
 from .models import (StaticServer, TransientServer, ServerHistory,
-                             ServerNote)
+                     ServerNote, ServerStatus, AuxServerAddress)
 from ghostwriter.rolodex.models import Project
 
 
@@ -75,6 +79,20 @@ class CheckoutForm(forms.ModelForm):
         # Return the cleaned data
         return end_date
 
+    def clean_domain(self):
+        insert = self.instance.pk == None
+        domain = self.cleaned_data['domain']
+        if insert:
+            unavailable = DomainStatus.objects.get(domain_status='Unavailable')
+            expired = domain.expiration < date.today()
+            if expired:
+                raise ValidationError("This domain's registration has expired!")
+            if domain.domain_status == unavailable:
+                raise ValidationError('Someone beat you to it. This domain has '
+                                      'already been checked out!')
+        # Return the cleaned data
+        return domain
+
 
 class ServerCheckoutForm(forms.ModelForm):
     """Form used for server checkout. Updates the server (status) and creates
@@ -137,6 +155,17 @@ class ServerCheckoutForm(forms.ModelForm):
         # Return the cleaned data
         return end_date
 
+    def clean_server(self):
+        insert = self.instance.pk == None
+        server = self.cleaned_data['server']
+        if insert:
+            unavailable = ServerStatus.objects.get(server_status='Unavailable')
+            if server.server_status == unavailable:
+                raise ValidationError('Someone beat you to it. This server has '
+                                      'already been checked out!')
+        # Return the cleaned data
+        return server
+
 
 class DomainCreateForm(forms.ModelForm):
     """Form used with the DomainCreate CreateView in views.py."""
@@ -144,7 +173,7 @@ class DomainCreateForm(forms.ModelForm):
         """Modify the attributes of the form."""
         model = Domain
         exclude = ('last_used_by', 'burned_explanation', 'all_cat',
-                   'dns_record', 'health_dns')
+                   'dns_record', 'health_dns', 'expired')
 
     def __init__(self, *args, **kwargs):
         """Override the `init()` function to set some attributes."""
@@ -209,6 +238,7 @@ class ServerCreateForm(forms.ModelForm):
         """Override the `init()` function to set some attributes."""
         super(ServerCreateForm, self).__init__(*args, **kwargs)
         self.fields['ip_address'].widget.attrs['placeholder'] = '172.10.10.236'
+        self.fields['name'].widget.attrs['placeholder'] = 'hostname'
         self.fields['server_status'].empty_label = '-- Select Status --'
         self.fields['server_provider'].empty_label = '-- Select Provider --'
         self.fields['note'].widget.attrs[
@@ -235,6 +265,8 @@ class TransientServerCreateForm(forms.ModelForm):
     def __init__(self, *args, **kwargs):
         """Override the `init()` function to set some attributes."""
         super(TransientServerCreateForm, self).__init__(*args, **kwargs)
+        self.fields['ip_address'].widget.attrs['placeholder'] = '172.10.10.236'
+        self.fields['name'].widget.attrs['placeholder'] = 'hostname'
         self.fields['activity_type'].empty_label = '-- Select Activity --'
         self.fields['server_role'].empty_label = '-- Select Role --'
         self.fields['server_provider'].empty_label = '-- Select Provider --'
@@ -357,3 +389,25 @@ class BurnForm(forms.ModelForm):
         self.helper.field_class = \
             'h-100 justify-content-center align-items-center'
         self.helper.form_show_labels = False
+
+
+class AuxServerAddressCreateForm(forms.ModelForm):
+    """Form used with the AuxAddress CreateView in views.py."""
+    class Meta:
+        """Modify the attributes of the form."""
+        model = AuxServerAddress
+        fields = ('__all__')
+        widgets = {
+                    'static_server': forms.HiddenInput(),
+                  }
+
+    def __init__(self, *args, **kwargs):
+        """Override the `init()` function to set some attributes."""
+        super(AuxServerAddressCreateForm, self).__init__(*args, **kwargs)
+        self.helper = FormHelper()
+        self.helper.form_class = 'form-inline'
+        self.helper.form_method = 'post'
+        self.helper.field_class = \
+            'h-100 justify-content-center align-items-center'
+        self.fields['primary'].label = 'Make Primary Address'
+        self.fields['ip_address'].label = ''

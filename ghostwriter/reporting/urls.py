@@ -13,6 +13,7 @@ from .views import (
     FindingDetailView,
     FindingUpdate,
     ReportCreate,
+    ReportCreateWithoutProject,
     ReportDelete,
     ReportDetailView,
     ReportFindingLinkDelete,
@@ -40,6 +41,8 @@ from .views import (
     report_delivery_toggle,
     reports_list,
     upload_evidence,
+    upload_evidence_modal,
+    upload_evidence_modal_success,
     view_evidence,
     FindingNoteCreate,
     FindingNoteUpdate,
@@ -47,7 +50,8 @@ from .views import (
     LocalFindingNoteCreate,
     LocalFindingNoteUpdate,
     LocalFindingNoteDelete,
-    convert_finding
+    convert_finding,
+    export_findings_to_csv
 ) 
 
 app_name = "reporting"
@@ -89,6 +93,8 @@ urlpatterns += [
                      name='report_detail'),
                 path('reports/<int:pk>/create/', ReportCreate.as_view(),
                      name='report_create'),
+                path('reports/create/', ReportCreateWithoutProject.as_view(),
+                     name='report_create_no_project'),
                 path('reports/<int:pk>/update/', ReportUpdate.as_view(),
                      name='report_update'),
                 path('reports/<int:pk>/delete/', ReportDelete.as_view(),
@@ -113,6 +119,10 @@ urlpatterns += [
                      name='local_remove'),
                 path('reports/<int:pk>/evidence/', upload_evidence,
                      name='upload_evidence'),
+                path('reports/<int:pk>/evidence/modal', upload_evidence_modal,
+                     name='upload_evidence_modal'),
+                path('reports/evidence/modal/success', upload_evidence_modal_success,
+                     name='upload_evidence_modal_success'),
                 path('reports/evidence/<int:pk>', view_evidence,
                      name='evidence_detail'),
                 path('reports/evidence/<int:pk>/edit',
@@ -164,4 +174,6 @@ urlpatterns += [
 urlpatterns += [
                 path('import/csv/', import_findings,
                      name='import_findings'),
+                path('export/csv/', export_findings_to_csv,
+                     name='export_findings_to_csv'),
                ]

@@ -1,6 +1,8 @@
 """This contains all of the forms for the Ghostwriter application."""
 
 from django import forms
+from django.core.exceptions import ValidationError
+from django.utils.translation import ugettext_lazy as _
 
 from crispy_forms.helper import FormHelper
 
@@ -54,8 +56,7 @@ class ReportCreateForm(forms.ModelForm):
         """Metadata for the model form."""
         model = Report
         exclude = ('creation', 'last_update',
-                   'created_by', 'project',
-                   'complete')
+                   'created_by', 'complete')
 
     def __init__(self, *args, **kwargs):
         """Override the `init()` function to set some attributes."""
@@ -107,6 +108,8 @@ class EvidenceForm(forms.ModelForm):
     def __init__(self, *args, **kwargs):
         """Override the `init()` function to set some attributes."""
         super(EvidenceForm, self).__init__(*args, **kwargs)
+        self.fields['caption'].required = True
+        self.fields['friendly_name'].required = True
         self.fields['friendly_name'].widget.attrs['placeholder'] = \
             'BloodHound Graph 1'
         self.fields['caption'].widget.attrs['placeholder'] = \
@@ -121,6 +124,18 @@ class EvidenceForm(forms.ModelForm):
         self.helper.form_method = 'post'
         self.helper.field_class = \
             'h-100 justify-content-center align-items-center'
+
+    def clean(self):
+        """Clean and sanitize user input."""
+        cleaned_data = super(EvidenceForm, self).clean()
+        friendly_name = cleaned_data.get('friendly_name')
+        finding = cleaned_data.get('finding')
+        # Check if provided name has already been used for another file for this report
+        report_queryset = Evidence.objects.filter(finding=finding.id).values_list('friendly_name', flat=True)
+        if friendly_name in report_queryset:
+            raise ValidationError(_('This friendly name has already been used for a file attached to this finding.'))
+        # Return the cleaned data
+        return cleaned_data
 
 
 class FindingNoteCreateForm(forms.ModelForm):

@@ -25,6 +25,8 @@ urlpatterns = [
                 path('codename/<int:pk>/project',
                      views.assign_project_codename,
                      name='project_codename'),
+                path('ajax/load_project/', views.ajax_load_project,
+                        name='ajax_load_project'),
               ]
 
 # URLs for creating, updating, and deleting clients
@@ -57,6 +59,9 @@ urlpatterns += [
 
 # URLs for creating, updating, and deleting projects
 urlpatterns += [
+                path('projects/create',
+                     views.ProjectCreateWithoutClient.as_view(),
+                     name='project_create_no_client'),
                 path('projects/<int:pk>/create',
                      views.ProjectCreate.as_view(),
                      name='project_create'),

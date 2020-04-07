@@ -73,6 +73,8 @@ THIRD_PARTY_APPS = [
     # "rest_framework",
     'django_q',
     'django_filters',
+    'import_export',
+    'tinymce',
 ]
 
 LOCAL_APPS = [
@@ -206,7 +208,7 @@ CSRF_COOKIE_HTTPONLY = True
 # https://docs.djangoproject.com/en/dev/ref/settings/#secure-browser-xss-filter
 SECURE_BROWSER_XSS_FILTER = True
 # https://docs.djangoproject.com/en/dev/ref/settings/#x-frame-options
-X_FRAME_OPTIONS = "DENY"
+X_FRAME_OPTIONS = "SAMEORIGIN"
 
 # EMAIL
 # ------------------------------------------------------------------------------
@@ -339,3 +341,15 @@ NAMECHEAP_CONFIG = {
     'client_ip': env("CLIENT_IP", default=None),
     'namecheap_page_size': env("NAMECHEAP_PAGE_SIZE", default="100")
 }
+
+# Cloud service configuration
+CLOUD_SERVICE_CONFIG = {
+    'aws_key': env("AWS_KEY", default=None),
+    'aws_secret': env("AWS_SECRET", default=None),
+    'do_api_key': env("DO_API_KEY", default=None)
+}
+
+TINYMCE_JS_ROOT = os.path.join(STATIC_ROOT, "js/tiny_mce")
+TINYMCE_JS_URL = os.path.join(STATIC_URL, "js/tiny_mce/tiny_mce.min.js")
+TINYMCE_SPELLCHECKER = True
+TINYMCE_COMPRESSOR = True

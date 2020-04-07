@@ -17,6 +17,12 @@ class DomainFilter(django_filters.FilterSet):
         queryset=DomainStatus.objects.all(),
         widget=forms.CheckboxSelectMultiple)
 
+    STATUS_CHOICES = (
+        (0, 'Active'),
+        (1, 'Expired'),
+    )
+    expiration_status = django_filters.ChoiceFilter(field_name='expired', choices=STATUS_CHOICES)
+
     class Meta:
         model = Domain
         fields = ['name', 'all_cat', 'health_status', 'domain_status']
@@ -25,10 +31,11 @@ class DomainFilter(django_filters.FilterSet):
 class ServerFilter(django_filters.FilterSet):
     """Filter used to search the `StaticServer` model."""
     ip_address = django_filters.CharFilter(lookup_expr='icontains')
+    name = django_filters.CharFilter(lookup_expr='icontains')
     server_status = django_filters.ModelMultipleChoiceFilter(
         queryset=ServerStatus.objects.all(),
         widget=forms.CheckboxSelectMultiple)
 
     class Meta:
         model = Domain
-        fields = ['ip_address', 'server_status']
+        fields = ['ip_address', 'name', 'server_status']
